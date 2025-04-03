@@ -1,0 +1,13 @@
+CREATE TABLE myTable (
+  id INTEGER PRIMARY KEY NOT NULL,
+  text TEXT NOT NULL
+);
+CREATE INDEX myTable_full_name ON myTable(text);
+DELETE FROM myTable;
+INSERT INTO myTable(id,text) VALUES (1, "bla");
+selectAll:
+SELECT id, text FROM myTable;
+insert:
+INSERT INTO myTable(text) VALUES (?);
+delete:
+DELETE FROM myTable WHERE id = ?;

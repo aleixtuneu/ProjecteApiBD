@@ -1,0 +1,8 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="composeApp-desktop">
+    <output-path>/dades/AleixTuneu/M07-M08/ProjectApiBBDD/composeApp/build/libs</output-path>
+    <root id="archive" name="composeApp-desktop.jar">
+      <element id="module-output" name="dbdemo3.composeApp.desktopMain" />
+    </root>
+  </artifact>
+</component>
