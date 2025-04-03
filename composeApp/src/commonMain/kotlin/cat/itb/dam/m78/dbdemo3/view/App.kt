@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,6 +34,10 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import coil3.compose.AsyncImage
+import kotlinx.serialization.SerialName
+import androidx.lifecycle.ViewModelProvider
+import androidx.navigation.NavController
 
 // Definició de destins
 object Destination {
@@ -60,6 +65,44 @@ data class PokemonListResponse(
     val results: List<Pokemon>
 )
 
+//
+@Serializable
+data class PokemonDetails(
+    val id: Int,
+    val name: String,
+    val height: Int,
+    val weight: Int,
+    val sprites: Sprites,
+    val types: List<TypeSlot>
+    //
+)
+
+@Serializable
+data class Sprites(
+    @SerialName("front_default")
+    val spriteDefault: String?
+)
+
+@Serializable
+data class TypeSlot(
+    val slot: Int,
+    val type: TypeInfo
+)
+
+@Serializable
+data class TypeInfo(
+    val name: String,
+    val url: String
+)
+
+// Estat per la UI de detalls
+data class PokemonInfoState(
+    val details: PokemonDetails? = null,
+    val isLoading: Boolean = false,
+    val error: String? = null
+)
+//
+
 // 2. Utilitzar ViewModel
 class PokemonsViewModel() : ViewModel() {
     val pokemons = mutableStateOf<List<Pokemon>>(emptyList())
@@ -77,11 +120,45 @@ class PokemonsViewModel() : ViewModel() {
         }
     }
 }
+//
+class PokemonInfoViewModel : ViewModel() {
+    var uiState by mutableStateOf(PokemonInfoState())
+        private set
+
+    fun loadPokemonDetails(pokemonId: String) {
+        if (pokemonId.isBlank()) {
+            uiState = uiState.copy(error = "ID de Pokémon no vàlid.",
+                isLoading = false)
+            return
+        }
+        // Evitar recarregar si ja està carregant o si ja tenim les dades
+        if (uiState.isLoading || uiState.details?.name?.equals(pokemonId, ignoreCase = true) == true || uiState.details?.id.toString() == pokemonId) {
+            return
+        }
+
+        uiState = uiState.copy(isLoading = true, error = null) // Començar a carregar
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val fetchedDetails = PokemonsApi.getDetails(pokemonId)
+                if (fetchedDetails != null) {
+                    uiState = uiState.copy(details = fetchedDetails, isLoading = false)
+                } else {
+                    uiState = uiState.copy(error = "No s'han pogut obtenir els detalls", isLoading = false)
+                }
+            } catch (e: Exception) {
+                uiState = uiState.copy(error = "Error: ${e.message}", isLoading = false)
+            }
+        }
+    }
+}
+//
 
 // 4. Classe que fa servir la api
 object PokemonsApi {
     // Atributs
-    val url = "https://pokeapi.co/api/v2/pokemon?limit=100000&offset=0";
+    val baseUrl = "https://pokeapi.co/api/v2/pokemon/"
+    val url = "https://pokeapi.co/api/v2/pokemon?limit=100000&offset=0"
     val client = HttpClient(CIO) {
         install(ContentNegotiation) {
             json(Json {
@@ -91,50 +168,73 @@ object PokemonsApi {
     }
 
     // Funcions
-    //suspend fun list() = client.get(url).body<List<Pokemon>>()
-    suspend fun list(): List<Pokemon> { // La función sigue devolviendo List<Pokemon>
+    suspend fun list(): List<Pokemon> {
         try {
-            // 1. Pide la respuesta completa y pársala a PokemonListResponse
             val response = client.get(url).body<PokemonListResponse>()
-            // 2. Devuelve solo la lista 'results' de la respuesta
             return response.results
         } catch (e: Exception) {
-            // Puedes hacer un log más específico aquí si quieres
-            println("Error en PokemonsApi.list: ${e.message}")
-            // Relanzar o devolver lista vacía según tu manejo de errores preferido
+            println("Error: ${e.message}")
             return emptyList()
-            // O throw RuntimeException("Fallo al obtener Pokemons", e)
         }
     }
+    //
+    suspend fun getDetails(pokemonId: String): PokemonDetails? {
+        return try { // retornar id del pokemon per obtenir detalls
+            val detailUrl = "$baseUrl$pokemonId/"
+            client.get(detailUrl).body<PokemonDetails>()
+        } catch (e: Exception) {
+            println("Error: ${e.message}")
+            null // Si falla retorna null
+        }
+    }
+    //
 }
 
 // Pantalla inicial
 @Composable
 fun PokemonsScreen(navigateToPokemonInfoScreen: (String) -> Unit) {
     val viewModel = viewModel { PokemonsViewModel() }
-    val pokemons = viewModel.pokemons.value
-
+    val allPokemons = viewModel.pokemons.value // Obtenir la llista original del ViewModel
+    var searchQuery by remember { mutableStateOf("") } // Estat per guardar text per buscar
     Column(
         modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        //verticalArrangement = Arrangement.Center
     ) {
-        if (pokemons.isEmpty()) {
+        if (allPokemons.isEmpty()) {
             CircularProgressIndicator(modifier = Modifier)
         } else {
+            // Buscar
+            TextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it }, // Actualitzar al escriure
+                label = { Text("Buscar Pokémon...") },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+
+            // Filtrar la llista
+            val filteredPokemons = if (searchQuery.isBlank()) {
+                allPokemons
+            } else {
+                allPokemons.filter { pokemon ->
+                    pokemon.name.contains(searchQuery, ignoreCase = true) // Ignorar majúscules/minúscules
+                }
+            }
+
+            // Mostrar la llista
             LazyColumn(
-                contentPadding = PaddingValues(16.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(pokemons) { pokemon ->
+                items(filteredPokemons) { pokemon ->
                     Column(
-                        modifier = Modifier.padding(16.dp)
+                        Modifier.fillMaxWidth().padding(vertical = 8.dp)
                     ) {
                         // Nom
                         Text(
-                            text = "${pokemon.name}",
-                            modifier = Modifier.clickable {
+                            text = pokemon.name.capitalize(),
+                            modifier = Modifier.fillMaxWidth().clickable {
                                 navigateToPokemonInfoScreen(pokemon.name)
                             }
                         )
@@ -147,31 +247,73 @@ fun PokemonsScreen(navigateToPokemonInfoScreen: (String) -> Unit) {
 
 // Pantalla Info Pokemon
 @Composable
-fun PokemonInfoScreen(pokemonId: String) {
-    val viewModel = viewModel { PokemonsViewModel() }
-    val pokemons = viewModel.pokemons.value
-    val pokemonsInfo = pokemons.filter { it.name == pokemonId }
+fun PokemonInfoScreen(pokemonId: String, navController: NavController, viewModel:PokemonInfoViewModel = viewModel()) {
+    LaunchedEffect(pokemonId) {
+        viewModel.loadPokemonDetails(pokemonId)
+    }
 
-    if (pokemonsInfo != null) {
-        LazyColumn(
-            modifier = Modifier.padding(16.dp).fillMaxWidth()
+    val state = viewModel.uiState
+
+    // Scaffold per el TopAppBar
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    // Mostrar nom del pokémon a la barra
+                    val pokemonName = state.details?.name?.capitalize() ?:""
+                    Text(pokemonName)
+                },
+                // Botó de navegació (tornar)
+                navigationIcon = {
+                    IconButton(onClick = {navController.navigateUp() }) {
+                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) // Fletxa enrere
+                    }
+                }
+            )
+        }
+    ) { paddingValues ->
+
+        Column(
+            modifier = Modifier.fillMaxSize().padding(paddingValues).padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
-            items(pokemonsInfo) { pokemonInfo ->
-                Column(
-                    modifier = Modifier.padding(16.dp)
-                ) {
+            when {
+                state.isLoading -> {
+                    CircularProgressIndicator()
+                }
+                state.error != null -> {
+                    Text("Error: ${state.error}", color = MaterialTheme.colors.error)
+                }
+                state.details != null -> {
+                    // Mostrar detalls del Pokémon
+                    val details = state.details
                     // Nom
-                    Text( text = "${pokemonInfo.name}")
+                    Text("${details.name.capitalize()}", style = MaterialTheme.typography.h5)
+                    // Id
+                    Text("ID: ${details.id}")
+                    // Imatge
+                    AsyncImage(
+                        model = details.sprites.spriteDefault,
+                        contentDescription = "Sprite de ${details.name}",
+                        modifier = Modifier.size(120.dp)
+                    )
+                    // Altura
+                    Text("Altura: ${details.height / 10.0} m") // Convertir a metres
+                    // Pes
+                    Text("Pes: ${details.weight / 10.0} kg") // Convertir a kg
 
-                    //
-
-                    // Resta atributs
-
+                    Text("Tipus:", style = MaterialTheme.typography.h6)
+                    details.types.forEach { typeSlot ->
+                        Text("- ${typeSlot.type.name.capitalize()}")
+                    }
+                }
+                else -> {
+                    // Estat inicial
+                    Text("Carregant detalls...")
                 }
             }
         }
-    } else {
-        Text("Pokemon no trobat.")
     }
 }
 
@@ -180,7 +322,7 @@ fun PokemonInfoScreen(pokemonId: String) {
 //
 @Composable
 @Preview
-fun App(viewModel: DatabaseViewModel=DatabaseViewModel()) {
+fun App(/*viewModel: DatabaseViewModel=DatabaseViewModel()*/) {
     // PokemonsScreen()
     val navController = rememberNavController()
     NavHost(navController = navController, startDestination = Destination.PokemonsScreen) {
@@ -189,81 +331,11 @@ fun App(viewModel: DatabaseViewModel=DatabaseViewModel()) {
                 navController.navigate(Destination.PokemonInfoScreen(id))
             }
         }
-        composable<Destination.PokemonInfoScreen> { backStack ->
-            val pokemonId = backStack.arguments?.getString("pokemonId") ?: ""
-            PokemonInfoScreen(pokemonId)
+        composable<Destination.PokemonInfoScreen> { backStack->
+            val destination: Destination.PokemonInfoScreen = backStack.toRoute()
+            PokemonInfoScreen(pokemonId = destination.pokemonId, // Pasar l'ID obtingut
+                navController = navController,
+                viewModel = viewModel(factory = ViewModelProvider.NewInstanceFactory())) // Proporcionar la factory per defecte perquè no salti error
         }
     }
-    /*
-    MaterialTheme {
-
-        //Llista amb tots els registres, obtinguda del ViewModel
-        val all = viewModel.allTexts.value
-        var inputText by remember { mutableStateOf("") }
-
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-            // Text field and button
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp)
-                    .background(MaterialTheme.colors.surface, shape = RoundedCornerShape(8.dp))
-                    .padding(16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    //El textField està enllaçat al camp inputText.  No està al ViewModel per què és funcionament de la pantalla
-                    TextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
-                        label = { Text("Enter text") },
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(8.dp)
-                            .background(MaterialTheme.colors.background, shape = RoundedCornerShape(8.dp))
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(
-                        // Quanes fa click, el botó cirda al ViewModel per fer un insert a la base de dades
-                        onClick = { viewModel.insertText(inputText) },
-                        colors = ButtonDefaults.buttonColors(backgroundColor = MaterialTheme.colors.primary),
-                        modifier = Modifier.padding(8.dp)
-                    ) {
-                        Text("Add", color = MaterialTheme.colors.onPrimary)
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // List of items
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                items(all) { item ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(8.dp)
-                            .background(MaterialTheme.colors.surface, shape = RoundedCornerShape(8.dp))
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(item.text, style = MaterialTheme.typography.body1)
-                        IconButton(onClick = {viewModel.deleteText(item.id) }) {
-                            Icon(Icons.Default.Delete, contentDescription = "Delete")
-                        }
-                    }
-                }
-            }
-        }
-    }
-    */
 }
